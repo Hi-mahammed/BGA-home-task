@@ -425,7 +425,6 @@ PORT=3003 npm run dev
    - `utils/persistence-helper.js` — DRY helper: saveBlockchainState() for controllers (Task 2)
    - `src/components/Wallet.js` — Wallet UI component (Task 1)
    - `src/components/Wallet.css` — Wallet component styles (Task 1)
-   - `.gitignore` — Ignore blockchain.json, node_modules/, build/, etc. (Task 2)
 
 **Modified Files Summary:**
 
@@ -445,6 +444,7 @@ PORT=3003 npm run dev
    - `controllers/stats.controller.js` — Added persistence metadata (fileExists, lastUpdated, fileSizeBytes)
    - `routes/index.js` — Registered wallet and signing routes
    - `config/index.js` — Demo data disabled by default (SEED_DEMO_DATA !== 'true')
+   - `.gitignore` — Ignore blockchain.json, node_modules/, build/, etc. (Task 2)
 
 ---
 
