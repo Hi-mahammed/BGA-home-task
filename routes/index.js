@@ -5,7 +5,6 @@ const miningRoutes = require('./mining.routes');
 const balanceRoutes = require('./balance.routes');
 const statsRoutes = require('./stats.routes');
 const walletRoutes = require('./wallet.routes');
-const signingRoutes = require('./signing.routes');
 
 const router = Router();
 
@@ -15,6 +14,5 @@ router.use('/mine', miningRoutes);
 router.use('/balance', balanceRoutes);
 router.use('/stats', statsRoutes);
 router.use('/wallets', walletRoutes);
-router.use('/sign', signingRoutes);
 
 module.exports = router;
