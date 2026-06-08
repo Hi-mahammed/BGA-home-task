@@ -39,7 +39,7 @@ hometask-blockchain/
 ├── routes/
 │   ├── index.js                  # Aggregates all /api sub-routes
 │   ├── blockchain.routes.js      # /api/chain
-│   ├── transaction.routes.js     # /api/transactions + /api/transactions/sign
+│   ├── transaction.routes.js     # /api/transactions + /api/transactions/sign (consolidated)
 │   ├── mining.routes.js          # /api/mine
 │   ├── balance.routes.js         # /api/balance
 │   ├── stats.routes.js           # /api/stats
@@ -48,11 +48,11 @@ hometask-blockchain/
 │
 ├── controllers/
 │   ├── blockchain.controller.js
-│   ├── transaction.controller.js # Updated: unsigned + signed transaction handling + persistence
+│   ├── transaction.controller.js # Consolidated: unsigned + signed transaction handling + persistence
 │   ├── mining.controller.js      # Updated: uses persistence-helper
 │   ├── balance.controller.js
 │   ├── stats.controller.js       # Updated: includes persistence file info
-│   └── wallet.controller.js      # NEW: secp256k1 key pair generation
+│   └── wallet.controller.js      # secp256k1 key pair generation
 │
 ├── src/                          # React frontend
 │   ├── api/
@@ -140,14 +140,17 @@ All API responses share a common envelope:
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/transactions` | Add a pending transaction |
+| POST | `/api/transactions` | Add a pending transaction (requires valid signature for regular addresses) |
+| POST | `/api/transactions/sign` | Sign and add transaction with private key (wallet-based) |
 | GET | `/api/transactions/pending` | All pending transactions |
 | GET | `/api/transactions/all` | All confirmed transactions |
 
 **POST `/api/transactions` body:**
 ```json
-{ "fromAddress": "address1", "toAddress": "address2", "amount": 100 }
+{ "fromAddress": "address1", "toAddress": "address2", "amount": 100, "signature": "..." }
 ```
+
+**Note:** Regular transactions must have a valid ECDSA signature. Unsigned transactions will be rejected.
 
 ### Mining
 
@@ -182,12 +185,6 @@ All API responses share a common envelope:
 }
 ```
 
-### Transaction Signing
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/transactions/sign` | Sign and submit a transaction with private key |
-
 **POST `/api/transactions/sign` body:**
 ```json
 {
@@ -195,6 +192,21 @@ All API responses share a common envelope:
   "toAddress": "recipient-public-key-hex",
   "amount": 100,
   "privateKeyHex": "private-key-hex"
+}
+```
+
+**Response on success (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Transaction signed and added to pending pool",
+  "transaction": {
+    "fromAddress": "public-key-hex",
+    "toAddress": "recipient-public-key-hex",
+    "amount": 100,
+    "timestamp": 1234567890,
+    "signature": "signature-hex"
+  }
 }
 ```
 
@@ -254,7 +266,9 @@ PORT=3003 npm run dev
 - Confirm `src/setupProxy.js` target matches `PORT`
 
 **Chain resets on every restart**
-- This is expected until you implement Task 2 (Data Persistence) from INSTRUCTIONS.md
+- Blockchain state is persisted to `blockchain.json` after each transaction and mining operation
+- On server restart, the previous state is loaded automatically
+- If `blockchain.json` is missing or corrupted, a fresh blockchain starts with genesis block
 
 ---
 
@@ -272,7 +286,7 @@ PORT=3003 npm run dev
 
    - `POST /api/transactions/sign` — Sign and submit a transaction with a private key
      - Requires: `fromAddress`, `toAddress`, `amount`, `privateKeyHex`
-     - Handled by `controllers/transaction.controller.js::signAndAddTransaction()`
+     - Handled by `controllers/transaction.controller.js::processTransaction()`
      - Reconstructs private key from hex, signs transaction, adds to pending
      - Rate-limited and request body validated
 
@@ -292,10 +306,10 @@ PORT=3003 npm run dev
      - Throws descriptive error if signature is invalid or missing
 
 3. **Backend Files (Task 1):**
-   - **New:** `controllers/wallet.controller.js` — Key pair generation via `generateKeyPairSync('ec', { namedCurve: 'secp256k1' })`
-   - **New:** `routes/wallet.routes.js` — Routes POST `/api/wallets` endpoint
-   - **Modified:** `controllers/transaction.controller.js` — Added `signAndAddTransaction()` for signed transaction submission
-   - **Modified:** `routes/transaction.routes.js` — Added POST `/transactions/sign` route for wallet-based transaction signing
+   - `controllers/wallet.controller.js` — Key pair generation via `generateKeyPairSync('ec', { namedCurve: 'secp256k1' })`
+   - `routes/wallet.routes.js` — Routes POST `/api/wallets` endpoint
+   - `controllers/transaction.controller.js` — Single `processTransaction()` handler: processes both signed and unsigned transactions
+   - `routes/transaction.routes.js` — Unified routes: POST `/transactions` and POST `/transactions/sign` (both use `processTransaction`)
 
 **Frontend Implementation:**
 
@@ -331,10 +345,10 @@ PORT=3003 npm run dev
 6. **Modified API Integration:**
    - `src/api/blockchain.api.js` — Added two new functions:
      - `generateWallet()` — Calls `POST /api/wallets`
-     - `signTransaction()` — Calls `POST /api/sign` with signed data
-   - `src/api/endpoints.js` — Added two new endpoints:
+     - `signTransaction()` — Calls `POST /api/transactions/sign` with signed data
+   - `src/api/endpoints.js` — Added new endpoints:
      - `WALLETS: '/api/wallets'`
-     - `SIGN: '/api/sign'`
+     - `TRANSACTIONS_SIGN: '/api/transactions/sign'`
 
 7. **Modified App Integration (`src/App.js`):**
    - Added `useState(wallet)` to track active wallet
@@ -384,8 +398,7 @@ PORT=3003 npm run dev
    - **Modified controllers using the helper:**
      - `controllers/mining.controller.js` — Calls helper after mining: `saveBlockchainState(..., 'mining')`
      - `controllers/transaction.controller.js` — Calls helper after adding unsigned tx: `saveBlockchainState(..., 'adding unsigned transaction')`
-     - `controllers/signing.controller.js` — Calls helper after signed tx: `saveBlockchainState(..., 'signing transaction')`
-
+  
 4. **Modified Monitoring (`controllers/stats.controller.js`):**
    - Enhanced `getStats()` with persistence file metadata:
      - `persistence.fileExists` — Boolean flag if blockchain.json exists
@@ -413,56 +426,64 @@ PORT=3003 npm run dev
      ```
    - All transactions preserve signatures on serialization/deserialization
 
-**New Files Summary:**
+**Backend Files Summary:**
 
-6. **New Files (Task 1 & 2):**
-   - `controllers/wallet.controller.js` — Wallet key pair generation (Task 1)
-   - `routes/wallet.routes.js` — POST /api/wallets route (Task 1)
-   - `services/persistence.service.js` — Full persistence logic: save/load/clear (Task 2)
-   - `utils/persistence-helper.js` — DRY helper: saveBlockchainState() for controllers (Task 2)
-   - `src/components/Wallet.js` — Wallet UI component (Task 1)
-   - `src/components/Wallet.css` — Wallet component styles (Task 1)
-
-**Modified Files Summary:**
-
-7. **Modified Files (Task 1):**
+6. **Files:**
+   - `controllers/wallet.controller.js` — Wallet key pair generation
+   - `routes/wallet.routes.js` — POST /api/wallets route
+   - `services/persistence.service.js` — Full persistence logic: save/load/clear
+   - `utils/persistence-helper.js` — DRY helper: saveBlockchainState() for controllers
    - `models/blockchain.js` — Enhanced Transaction.signTransaction() + Transaction.isValid()
-   - `controllers/transaction.controller.js` — Added signAndAddTransaction() function
-   - `routes/transaction.routes.js` — Added POST /transactions/sign route
-   - `src/api/blockchain.api.js` — Added generateWallet(), signTransaction() functions
-   - `src/api/endpoints.js` — Added WALLETS, SIGN endpoints
-   - `src/components/TransactionForm.js` — Wallet-based signing instead of plain transactions
-   - `src/components/TransactionForm.css` — Added no-wallet-message, form-input-disabled, form-hint
-   - `src/App.js` — Added wallet state, integrated Wallet component
-
-8. **Modified Files (Task 2):**
-   - `models/index.js` — Added persistence.load() on startup, conditional seeding, save() after mining
+   - `controllers/transaction.controller.js` — Unified handler: `processTransaction()` (handles both signed/unsigned)
+   - `routes/transaction.routes.js` — Unified routes using single `processTransaction()` handler
+   - `models/index.js` — Persistence.load() on startup, conditional seeding, save() after mining
    - `controllers/mining.controller.js` — Uses saveBlockchainState() helper after mining
    - `controllers/stats.controller.js` — Added persistence metadata (fileExists, lastUpdated, fileSizeBytes)
-   - `routes/index.js` — Registered wallet routes
+   - `routes/index.js` — Updated to use consolidated transaction routes
    - `config/index.js` — Demo data disabled by default (SEED_DEMO_DATA !== 'true')
-   - `.gitignore` — Ignore blockchain.json, node_modules/, build/, etc. 
+
+**Frontend Files Summary:**
+
+7. **Files:**
+   - `src/components/Wallet.js` — Wallet UI component with polling
+   - `src/components/Wallet.css` — Wallet component styles
+   - `src/api/blockchain.api.js` — Added generateWallet(), signTransaction() functions
+   - `src/api/endpoints.js` — Updated endpoints: TRANSACTIONS_SIGN
+   - `src/components/TransactionForm.js` — Wallet-based signing
+   - `src/components/TransactionForm.css` — Enhanced with form helpers
+   - `src/App.js` — Added wallet state, integrated Wallet component 
 
 ---
 
 ### Architecture & Principles
 
-**Layered Pattern (Maintained):**
+**Layered Pattern:**
 - Routes → Controllers → Models/Services
 - All persistence calls centralized in `services/`, invoked via helper
 - No persistence logic in `server.js` or directly in controllers
 - Configuration in `config/`, utilities in `utils/`
 
 **DRY Principle:**
-- Single `saveBlockchainState()` helper used by all 2 controllers
+- Single `processTransaction()` handler for both signed and unsigned transactions
+- Single `saveBlockchainState()` helper used by mining and transaction controllers
+- Unified route handlers: POST `/transactions` and POST `/transactions/sign` both call `processTransaction()`
 - Centralized `persistenceService.save/load/clear()` — called from one place
 - Shared error handling and logging via logger + helper
+- No code duplication in transaction processing logic
+
+**Cryptography:**
+- ECDSA with secp256k1 curve (Node.js native `crypto` module)
+- SHA-256 hashing for transaction digests
+- Public key stored as hex-encoded SPKI DER bytes
+- Private key stored as hex-encoded PKCS#8 DER bytes
+- Signatures stored as hex-encoded raw signature bytes
 
 **Error Handling:**
 - All file I/O caught with try-catch
 - No errors thrown from persistence layer — always logged + handled gracefully
 - Validation of loaded state before restoration
 - Corruption → graceful fallback to fresh blockchain
+- Invalid signatures rejected at blockchain level
 
 **Logging:**
 - Save events: debug level (successful), error level (failures)
